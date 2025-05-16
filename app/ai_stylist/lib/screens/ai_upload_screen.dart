@@ -1,19 +1,38 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:io';
+import '../repositories/image_repository.dart';
 import '../data/dummy_data.dart';
 import '../models/fashion_item.dart';
 import 'product_detail_screen.dart';
 
-final Map<String, String> predefinedSuggestions = {
-  "beach, please!":
-      "Make waves by the water in the season's best swimwear and cover-ups.",
-  "away we go":
-      "Pool float, beach towel, flip-flops – luggage for all your holiday essentials.",
-  "work meeting outfit":
-      "Opt for a tailored blazer and smart trousers for a professional look.",
-  "date night":
-      "Try a chic midi dress with statement accessories for your special evening.",
-  // Add more prompts and suggestions here!
-};
+final List<Map<String, dynamic>> predefinedSuggestions = [
+  {
+    "keywords": ["beach, please!", "beach", "swim", "cover-up"],
+    "suggestion":
+        "Make waves by the water in the season's best swimwear and cover-ups.",
+    "productId": "9", // Leem Kaftan
+  },
+  {
+    "keywords": ["away we go", "holiday", "pool float"],
+    "suggestion":
+        "Pool float, beach towel, flip-flops – luggage for all your holiday essentials.",
+    "productId": null,
+  },
+  {
+    "keywords": ["work meeting outfit", "work", "meeting"],
+    "suggestion":
+        "Opt for a tailored blazer and smart trousers for a professional look.",
+    "productId": "5", // Tailored Blazer
+  },
+  {
+    "keywords": ["date night", "date"],
+    "suggestion":
+        "Try a chic midi dress with statement accessories for your special evening.",
+    "productId": "4", // Floral Maxi Dress
+  },
+  // Add more...
+];
 
 class AIUploadScreen extends StatefulWidget {
   const AIUploadScreen({Key? key}) : super(key: key);
@@ -24,9 +43,12 @@ class AIUploadScreen extends StatefulWidget {
 
 class _AIUploadScreenState extends State<AIUploadScreen> {
   String? _selectedImagePath;
+  String? _uploadedImageUrl;
   final TextEditingController _textController = TextEditingController();
   String? _suggestion;
   FashionItem? _suggestedItem;
+  List<String> _imageTags = [];
+  final ImageRepository _imageRepo = ImageRepository();
 
   @override
   void dispose() {
@@ -34,30 +56,52 @@ class _AIUploadScreenState extends State<AIUploadScreen> {
     super.dispose();
   }
 
-  void _pickImage() async {
-    // TODO: Integrate image picker
-    setState(() {
-      _selectedImagePath =
-          'assets/images/Oversized Denim Jacket.jpg'; // Placeholder
-    });
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
+      setState(() {
+        _selectedImagePath = pickedFile.path;
+        _uploadedImageUrl = null;
+        _imageTags = [];
+      });
+      // 1. Upload to Firebase Storage
+      final downloadUrl = await _imageRepo.uploadImageToFirebase(pickedFile);
+      debugPrint('Firebase Storage Download URL: $downloadUrl');
+      setState(() {
+        _uploadedImageUrl = downloadUrl;
+      });
+      // 2. Analyze image using Vertex AI (mocked)
+      final tags = await _imageRepo.analyzeImageWithVertexAI(downloadUrl);
+      setState(() {
+        _imageTags = tags;
+      });
+      // 3. Store tags and image URL in Firestore
+      await _imageRepo.storeImageTags(downloadUrl, tags);
+    }
   }
 
   void _getSuggestion() {
     final prompt = _textController.text.toLowerCase().trim();
-
-    // Flexible matching: check if prompt contains any key (case-insensitive)
-    final match = predefinedSuggestions.keys.firstWhere(
-      (k) => prompt.contains(k.toLowerCase().trim()),
-      orElse: () => '',
-    );
-    if (match.isNotEmpty) {
-      setState(() {
-        _suggestion = predefinedSuggestions[match];
-        _suggestedItem = null;
-      });
-      return;
+    // Fuzzy/partial matching for predefined suggestions
+    for (final entry in predefinedSuggestions) {
+      for (final keyword in (entry["keywords"] as List<String>)) {
+        if (prompt.contains(keyword.toLowerCase().trim())) {
+          setState(() {
+            _suggestion = entry["suggestion"] as String;
+            final productId = entry["productId"] as String?;
+            _suggestedItem = productId != null
+                ? dummyFashionItems.firstWhere(
+                    (item) => item.id == productId,
+                    orElse: () => dummyFashionItems.first,
+                  )
+                : null;
+          });
+          return;
+        }
+      }
     }
-    // Keywords for beach/holiday
+    // Keywords for beach/holiday (legacy fallback)
     final beachKeywords = [
       'beach',
       'swim',
@@ -183,9 +227,44 @@ class _AIUploadScreenState extends State<AIUploadScreen> {
               icon: const Icon(Icons.image),
               label: const Text('Upload Image'),
             ),
-            if (_selectedImagePath != null) ...[
+            if (_uploadedImageUrl != null) ...[
               const SizedBox(height: 12),
-              Image.asset(_selectedImagePath!, height: 120),
+              Text('Download URL: $_uploadedImageUrl',
+                  style: TextStyle(fontSize: 10, color: Colors.grey)),
+              Image.network(_uploadedImageUrl!, height: 120),
+              if (_imageTags.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey[300]!),
+                  ),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _imageTags
+                        .map((tag) => Chip(
+                              label: Text(tag,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w500)),
+                              backgroundColor: Colors.grey[100],
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                side: BorderSide(color: Colors.grey[300]!),
+                              ),
+                              deleteIcon: const Icon(Icons.close, size: 18),
+                              onDeleted: () {
+                                setState(() {
+                                  _imageTags.remove(tag);
+                                });
+                              },
+                            ))
+                        .toList(),
+                  ),
+                ),
+              ],
             ],
             const SizedBox(height: 24),
             TextField(

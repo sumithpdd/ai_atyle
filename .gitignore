@@ -25,3 +25,6 @@ doc/api/
 
 .flutter-plugins
 .flutter-plugins-dependencies
+app/ai_stylist/firebase.json
+app/ai_stylist/android/app/google-services.json
+app/ai_stylist/lib/firebase_options.dart
